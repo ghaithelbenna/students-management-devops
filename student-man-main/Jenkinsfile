@@ -51,8 +51,15 @@ pipeline {
             steps {
                 dir('student-man-main') {
                     sh '''
-                        echo "🔍 Scanning Docker image for vulnerabilities..."
-                        trivy image --exit-code 0 --severity HIGH,CRITICAL $REGISTRY/$IMAGE:latest
+                    echo "🛠️  Pre-downloading Trivy vulnerability database..."
+                    trivy --config /dev/null image --download-db-only || true
+
+                    echo "🔍 Scanning Docker image for HIGH and CRITICAL vulnerabilities..."
+                    trivy image --scanners vuln \
+                                --timeout 10m \
+                                --exit-code 0 \
+                                --severity HIGH,CRITICAL \
+                                $REGISTRY/$IMAGE:latest
                     '''
                 }
             }
