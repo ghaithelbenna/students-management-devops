@@ -74,8 +74,15 @@ pipeline {
                     trivy --config /dev/null image --download-db-only || true
 
                     echo "🔍 Scanning Docker image for HIGH and CRITICAL vulnerabilities..."
-                    trivy image --ignore-unfixed --scanners vuln  --light  --timeout 25m --exit-code 0 --severity HIGH,CRITICAL $REGISTRY/$IMAGE:latest
+                    trivy image --ignore-unfixed --scanners vuln --light --timeout 25m \
+                        --exit-code 0 --severity HIGH,CRITICAL \
+                        --format html -o trivy-report.html $REGISTRY/$IMAGE:latest
                     '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
                 }
             }
         }
@@ -96,8 +103,23 @@ pipeline {
     }
 
     post {
+        always {
+            echo '📊 Generating summary report...'
+            sh '''
+            echo "<html><head><title>DevSecOps Report</title></head><body>
+            <h1>DevSecOps Security Pipeline Summary</h1>
+            <ul>
+                <li><a href='student-man-main/target/dependency-check-report.html'>Dependency Check Report</a></li>
+                <li><a href='student-man-main/trivy-report.html'>Trivy Image Scan Report</a></li>
+                <li><a href='http://192.168.49.2:32000/dashboard?id=studentmang-app'>SonarQube Dashboard</a></li>
+            </ul>
+            <p>Generated automatically by Jenkins at $(date)</p>
+            </body></html>" > summary-report.html
+            '''
+            archiveArtifacts artifacts: 'summary-report.html', allowEmptyArchive: true
+        }
         success {
-            echo '✅ Build, Dependency Check, Security Scan, and Push completed successfully!'
+            echo '✅ All security reports generated and archived successfully!'
         }
         failure {
             echo '❌ Pipeline failed. Check logs for more details.'
