@@ -4,12 +4,33 @@ pipeline {
     environment {
         REGISTRY = "farzzit"
         IMAGE = "studentmang-app"
+        
+        // --- CORRECTED URLs ---
+        // SonarQube on Ubuntu VM IP (Docker container)
+        SONAR_HOST_URL = "http://192.168.33.10:9000"
+        // Spring App DAST Target on Minikube Node IP (NodePort: 32639)
+        APP_DAST_URL = "http://192.168.49.2:32639"
+        
+        // Reports
+        GITLEAKS_REPORT = "gitleaks-report.json"
     }
 
     stages {
-        stage('Clone Repository') {
+        stage('Clone Repository & Secrets Scan') {
             steps {
                 git branch: 'master', url: 'https://github.com/medaminehammami/student-management-devops.git'
+                dir('student-man-main') {
+                    sh '''
+                    echo "🔒 Running Gitleaks Secrets Scan..."
+                    gitleaks detect -f json --report-path $GITLEAKS_REPORT --source . || true
+                    '''
+                }
+            }
+            post {
+                always {
+                    // FIX: Double quotes for variable interpolation ($GITLEAKS_REPORT)
+                    archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: true
+                }
             }
         }
 
@@ -20,7 +41,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Dependency Check (SCA)') {
             steps {
                 dir('student-man-main') {
@@ -38,26 +59,34 @@ pipeline {
                 }
             }
         }
-
+        
         stage('SonarQube (SAST)') {
             environment {
-                SONARQUBE = credentials('sonarqube-token')
+                SONARQUBE = credentials('sonarqube-token') 
             }
             steps {
                 dir('student-man-main') {
                     withSonarQubeEnv('SonarQube') {
                         sh '''
                         echo "📊 Running SonarQube static code analysis..."
+                        # SonarQube URL: 192.168.33.10:9000 (Correct)
                         mvn sonar:sonar \
                           -Dsonar.projectKey=studentmang-app \
-                          -Dsonar.host.url=http://192.168.33.10:9000 \
+                          -Dsonar.host.url=${SONAR_HOST_URL} \
                           -Dsonar.login=$SONARQUBE || true
                         '''
                     }
                 }
             }
+            post {
+                 success {
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitForQualityGate abortPipeline: true
+                    }
+                }
+            }
         }
-
+        
         stage('Build Docker Image') {
             steps {
                 dir('student-man-main') {
@@ -65,7 +94,7 @@ pipeline {
                 }
             }
         }
-
+        
         stage('Trivy Scan (Container Security)') {
             steps {
                 dir('student-man-main') {
@@ -82,6 +111,23 @@ pipeline {
             post {
                 always {
                     archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Nikto Scan (DAST)') {
+            steps {
+                dir('student-man-main') {
+                    sh '''
+                    echo "💥 Running Nikto web vulnerability scan on $APP_DAST_URL..."
+                    # DAST URL: 192.168.49.2:32639 (Corrected)
+                    nikto -h $APP_DAST_URL -maxtime 60 -Format html -o nikto-report.html || true
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/nikto-report.html', allowEmptyArchive: true
                 }
             }
         }
@@ -108,9 +154,11 @@ pipeline {
                     <html><head><title>DevSecOps Report</title></head><body>
                         <h2>✅ DevSecOps Security Pipeline Summary</h2>
                         <ul>
-                            <li><a href='target/dependency-check-report.html'>Dependency Check Report</a></li>
-                            <li><a href='trivy-report.html'>Trivy Image Scan Report</a></li>
-                            <li><a href='http://192.168.33.10:9000/dashboard?id=studentmang-app'>SonarQube Dashboard</a></li>
+                            <li><a href='target/dependency-check-report.html'>Dependency Check Report (SCA)</a></li>
+                            <li><a href='trivy-report.html'>Trivy Image Scan Report (Container)</a></li>
+                            <li><a href='nikto-report.html'>Nikto Server Scan Report (DAST)</a></li>
+                            <li><a href='${GITLEAKS_REPORT}'>Gitleaks Secrets Scan Report</a></li>
+                            <li><a href='${SONAR_HOST_URL}/dashboard?id=studentmang-app'>SonarQube Dashboard (SAST)</a></li>
                         </ul>
                         <p>Generated by Jenkins on ${time}</p>
                     </body></html>
@@ -124,6 +172,9 @@ pipeline {
     post {
         always {
             echo '🎯 Pipeline finished. Reports generated successfully.'
+        }
+        failure {
+            echo '❌ Pipeline failed. Please check logs and reports for issues.'
         }
     }
 }
