@@ -2,65 +2,63 @@ pipeline {
     agent any
 
     environment {
-        PATH = "/usr/local/bin:${PATH}"
+        K8S_PATH = "k8s"
         REPORT_DIR = "reports"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main', url: 'https://github.com/medaminehammami/student-management-devops.git'
-                sh 'mkdir -p ${REPORT_DIR}'
+                git branch: 'master', url: 'https://github.com/medaminehammami/student-management-devops.git'
             }
         }
 
         stage('KubeLinter Scan') {
             steps {
-                echo '🔍 Running KubeLinter...'
+                echo "🔍 Running KubeLinter scan..."
                 sh '''
-                    echo "<h2>KubeLinter Security Report</h2><pre>" > ${REPORT_DIR}/kube-linter-report.html
-                    kube-linter lint student-man-main/k8s/ >> ${REPORT_DIR}/kube-linter-report.html 2>&1 || true
-                    echo "</pre>" >> ${REPORT_DIR}/kube-linter-report.html
+                    mkdir -p ${REPORT_DIR}/kubelinter
+                    kube-linter lint ${K8S_PATH} --format html > ${REPORT_DIR}/kubelinter/index.html || true
                 '''
             }
         }
 
         stage('Kubescape Scan') {
             steps {
-                echo '🛡️ Running Kubescape...'
+                echo "🛡️ Running Kubescape scan..."
                 sh '''
-                    echo "<h2>Kubescape NSA Framework Report</h2><pre>" > ${REPORT_DIR}/kubescape-report.html
-                    kubescape scan framework nsa --use-host-network --format table >> ${REPORT_DIR}/kubescape-report.html 2>&1 || true
-                    echo "</pre>" >> ${REPORT_DIR}/kubescape-report.html
+                    mkdir -p ${REPORT_DIR}/kubescape
+                    kubescape scan framework nsa --format html --output ${REPORT_DIR}/kubescape/index.html || true
                 '''
             }
         }
 
-        stage('Generate Summary Report') {
+        stage('Publish Reports') {
             steps {
-                echo '📊 Combining reports...'
-                sh '''
-                    echo "<html><head><title>Kubernetes Security Scan</title></head><body>" > ${REPORT_DIR}/index.html
-                    echo "<h1>Kubernetes Security Scan Summary</h1>" >> ${REPORT_DIR}/index.html
-                    cat ${REPORT_DIR}/kube-linter-report.html >> ${REPORT_DIR}/index.html
-                    cat ${REPORT_DIR}/kubescape-report.html >> ${REPORT_DIR}/index.html
-                    echo "</body></html>" >> ${REPORT_DIR}/index.html
-                '''
+                publishHTML(target: [
+                    allowMissing: true,
+                    keepAll: true,
+                    alwaysLinkToLastBuild: true,
+                    reportDir: "${REPORT_DIR}/kubelinter",
+                    reportFiles: 'index.html',
+                    reportName: 'KubeLinter Report'
+                ])
+                publishHTML(target: [
+                    allowMissing: true,
+                    keepAll: true,
+                    alwaysLinkToLastBuild: true,
+                    reportDir: "${REPORT_DIR}/kubescape",
+                    reportFiles: 'index.html',
+                    reportName: 'Kubescape Report'
+                ])
             }
         }
     }
 
     post {
         always {
-            echo '✅ Security scans completed. Reports saved in Jenkins artifacts.'
-            archiveArtifacts artifacts: 'reports/*.html', fingerprint: true
-            publishHTML(target: [
-                allowMissing: false,
-                keepAll: true,
-                reportDir: 'reports',
-                reportFiles: 'index.html',
-                reportName: 'Kubernetes Security Scan'
-            ])
+            echo "✅ Security scans completed. Reports archived."
+            archiveArtifacts artifacts: "${REPORT_DIR}/**", allowEmptyArchive: true
         }
     }
 }
