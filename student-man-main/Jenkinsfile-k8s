@@ -1,52 +1,50 @@
 pipeline {
     agent any
+
     environment {
-        KUBECONFIG = '/home/jenkins/.kube/config'
+        PATH = "/usr/local/bin:${PATH}"
+        REPORT_DIR = "reports"
     }
 
     stages {
-        stage('Clone Repository') {
+        stage('Checkout') {
             steps {
-                git branch: 'master', url: 'https://github.com/medaminehammami/student-management-devops.git'
-            }
-        }
-
-        stage('Kube-Score Scan') {
-            steps {
-                dir('student-man-main/k8s') {
-                    sh '''
-                    echo "🧩 Checking YAML best practices with kube-score..."
-                    kube-score score --output-format ci *.yaml || true
-                    '''
-                }
+                git branch: 'main', url: 'https://github.com/medaminehammami/student-management-devops.git'
+                sh 'mkdir -p ${REPORT_DIR}'
             }
         }
 
         stage('KubeLinter Scan') {
             steps {
-                dir('student-man-main/k8s') {
-                    sh '''
-                    echo "🔍 Running KubeLinter security audit..."
-                    kubelinter lint . --format pretty || true
-                    '''
-                }
-            }
-        }
-
-        stage('Trivy K8s Scan') {
-            steps {
+                echo '🔍 Running KubeLinter...'
                 sh '''
-                echo "🔒 Running Trivy Kubernetes cluster audit..."
-                trivy k8s --report summary cluster || true
+                    echo "<h2>KubeLinter Security Report</h2><pre>" > ${REPORT_DIR}/kube-linter-report.html
+                    kube-linter lint student-man-main/k8s/ >> ${REPORT_DIR}/kube-linter-report.html 2>&1 || true
+                    echo "</pre>" >> ${REPORT_DIR}/kube-linter-report.html
                 '''
             }
         }
 
-        stage('Kubescape (Optional)') {
+        stage('Kubescape Scan') {
             steps {
+                echo '🛡️ Running Kubescape...'
                 sh '''
-                echo "🧠 Running Kubescape for posture & compliance (NSA/CIS)..."
-                kubescape scan framework nsa || true
+                    echo "<h2>Kubescape NSA Framework Report</h2><pre>" > ${REPORT_DIR}/kubescape-report.html
+                    kubescape scan framework nsa --use-host-network --format table >> ${REPORT_DIR}/kubescape-report.html 2>&1 || true
+                    echo "</pre>" >> ${REPORT_DIR}/kubescape-report.html
+                '''
+            }
+        }
+
+        stage('Generate Summary Report') {
+            steps {
+                echo '📊 Combining reports...'
+                sh '''
+                    echo "<html><head><title>Kubernetes Security Scan</title></head><body>" > ${REPORT_DIR}/index.html
+                    echo "<h1>Kubernetes Security Scan Summary</h1>" >> ${REPORT_DIR}/index.html
+                    cat ${REPORT_DIR}/kube-linter-report.html >> ${REPORT_DIR}/index.html
+                    cat ${REPORT_DIR}/kubescape-report.html >> ${REPORT_DIR}/index.html
+                    echo "</body></html>" >> ${REPORT_DIR}/index.html
                 '''
             }
         }
@@ -54,7 +52,15 @@ pipeline {
 
     post {
         always {
-            echo '✅ Kubernetes hardening & security scan complete!'
+            echo '✅ Security scans completed. Reports saved in Jenkins artifacts.'
+            archiveArtifacts artifacts: 'reports/*.html', fingerprint: true
+            publishHTML(target: [
+                allowMissing: false,
+                keepAll: true,
+                reportDir: 'reports',
+                reportFiles: 'index.html',
+                reportName: 'Kubernetes Security Scan'
+            ])
         }
     }
 }
