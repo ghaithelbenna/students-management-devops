@@ -2,8 +2,8 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = "farzzit"
-        IMAGE = "studentmang-app"
+        REGISTRY = "ghaith6789"
+        IMAGE = "student_app_management"
 
         // Correct URLs
         SONAR_HOST_URL = "http://192.168.33.10:9000"        // Local SonarQube on Ubuntu
@@ -15,7 +15,7 @@ pipeline {
     stages {
         stage('Clone Repository & Secrets Scan (Gitleaks)') {
             steps {
-                git branch: 'master', url: 'https://github.com/medaminehammami/student-management-devops.git'
+                git branch: 'master', url: 'https://github.com/ghaithelbenna/students-management-devops.git'
                 dir('student-man-main') {
                     sh '''
                     echo "🔒 Running Gitleaks Secrets Scan..."
