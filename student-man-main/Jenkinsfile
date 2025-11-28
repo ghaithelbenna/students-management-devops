@@ -179,7 +179,7 @@ pipeline {
             echo '🎯 Pipeline finished. Reports generated successfully.'
         }
         failure {
-            echo '❌ Pipeline failed. Please check logs and reports for issues.'
+            echo '❌  Pipeline failed. Please check logs and reports for issues.'
         }
     }
 }
