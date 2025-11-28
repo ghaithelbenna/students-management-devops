@@ -12,6 +12,8 @@ pipeline {
         GITLEAKS_REPORT = "gitleaks-report.json"
     }
 
+
+
     stages {
         stage('Clone Repository & Secrets Scan (Gitleaks)') {
             steps {
