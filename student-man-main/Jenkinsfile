@@ -1,26 +1,39 @@
 pipeline {
     agent any
 
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+        // skipDefaultCheckout(true)  // on fera checkout nous-mêmes
+    }
+
     environment {
         REGISTRY = "ghaith6789"
         IMAGE = "student_app_management"
 
-        // Correct URLs
-        SONAR_HOST_URL = "http://192.168.33.10:9000"        // Local SonarQube on Ubuntu
-        APP_DAST_URL   = "http://192.168.49.2:32639"        // Spring App on Minikube NodePort
+        SONAR_HOST_URL = "http://192.168.33.10:9000"
+        APP_DAST_URL   = "http://192.168.49.2:32639"
 
         GITLEAKS_REPORT = "gitleaks-report.json"
     }
 
-
-
-
-
-
     stages {
-        stage('Clone Repository & Secrets Scan (Gitleaks)') {
+
+        stage('Clean Workspace') {
             steps {
-                git branch: 'master', url: 'https://github.com/ghaithelbenna/students-management-devops.git'
+                cleanWs()   // si pas le plugin, remplace par deleteDir()
+            }
+        }
+
+        stage('Checkout') {
+            steps {
+                git branch: 'master',
+                    url: 'https://github.com/ghaithelbenna/students-management-devops.git'
+            }
+        }
+
+        stage('Secrets Scan (Gitleaks)') {
+            steps {
                 dir('student-man-main') {
                     sh '''
                     echo "🔒 Running Gitleaks Secrets Scan..."
@@ -38,7 +51,7 @@ pipeline {
         stage('Build with Maven') {
             steps {
                 dir('student-man-main') {
-                    sh 'mvn clean package -DskipTests'
+                    sh 'mvn -B clean package -DskipTests'
                 }
             }
         }
@@ -48,7 +61,7 @@ pipeline {
                 dir('student-man-main') {
                     sh '''
                     echo "🔍 Running lightweight OWASP Dependency-Check..."
-                    mvn org.owasp:dependency-check-maven:check \
+                    mvn -B org.owasp:dependency-check-maven:check \
                         -Dformat=HTML \
                         -DskipAssembly=true || true
                     '''
@@ -70,7 +83,7 @@ pipeline {
                     withSonarQubeEnv('SonarQube') {
                         sh '''
                         echo "📊 Running SonarQube static code analysis..."
-                        mvn sonar:sonar \
+                        mvn -B sonar:sonar \
                           -Dsonar.projectKey=studentmang-app \
                           -Dsonar.host.url=${SONAR_HOST_URL} \
                           -Dsonar.login=$SONARQUBE || true
@@ -78,7 +91,6 @@ pipeline {
                     }
                 }
             }
-            // 🚀 Removed timeout & waitForQualityGate for speed
         }
 
         stage('Build Docker Image') {
