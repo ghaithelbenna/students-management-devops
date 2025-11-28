@@ -11,6 +11,7 @@ pipeline {
         REGISTRY = "ghaith6789"
         IMAGE = "student_app_management"
 
+
         SONAR_HOST_URL = "http://192.168.33.10:9000"
         APP_DAST_URL   = "http://192.168.49.2:32639"
 
@@ -102,24 +103,31 @@ pipeline {
         }
 
         stage('Trivy Scan (Container Security)') {
-            steps {
-                dir('student-man-main') {
-                    sh '''
-                    echo "🧪 Quick Trivy vulnerability scan..."
-                    trivy image --quiet --severity HIGH,CRITICAL \
-                                --light --timeout 5m \
-                                --format table \
-                                --output trivy-report.html \
-                                $REGISTRY/$IMAGE:latest || true
-                    '''
-                }
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
-                }
-            }
+    environment {
+        TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
+    }
+    steps {
+        dir('student-man-main') {
+            sh '''
+            echo "⬇️ Pre-downloading Trivy DB..."
+            trivy image --download-db-only || true
+
+            echo "🧪 Running Trivy vulnerability scan..."
+            trivy image --severity HIGH,CRITICAL \
+                        --timeout 10m \
+                        --format table \
+                        --output trivy-report.html \
+                        $REGISTRY/$IMAGE:latest || true
+            '''
         }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
+        }
+    }
+}
+
 
         stage('Nikto Scan (DAST)') {
             steps {
