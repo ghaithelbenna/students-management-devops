@@ -7,6 +7,7 @@ pipeline {
         // skipDefaultCheckout(true)
     }
 
+
     environment {
         REGISTRY = "ghaith6789"
         IMAGE = "student_app_management"
