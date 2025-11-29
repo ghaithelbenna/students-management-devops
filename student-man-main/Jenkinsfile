@@ -99,35 +99,43 @@ pipeline {
             }
         }
 
-        // ✅ 5) SAST Sonar prod : pas de true + quality gate
+        // ✅ 5) SAST Sonar prod + webhook
         stage('SonarQube (SAST)') {
             environment {
-                SONARQUBE = credentials('sonarqube-token')
+                SONAR_TOKEN = credentials('sonarqube-token')
             }
             steps {
                 dir('student-man-main') {
                     withSonarQubeEnv('SonarQube') {
-                        sh '''
+                        sh """
                         echo "📊 Running SonarQube static code analysis..."
                         mvn -B sonar:sonar \
                           -Dsonar.projectKey=studentmang-app \
                           -Dsonar.host.url=${SONAR_HOST_URL} \
-                          -Dsonar.login=$SONARQUBE
-                        '''
+                          -Dsonar.token=$SONAR_TOKEN
+                        """
                     }
                 }
             }
         }
 
+        // ✅ ✅ 5bis) Quality Gate (Production ready)
         stage('Quality Gate') {
             steps {
-                timeout(time: 2, unit: 'MINUTES') {
-                    waitForQualityGate abortPipeline: true
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        def qg = waitForQualityGate()
+                        echo "✅ Quality Gate status: ${qg.status}"
+
+                        if (qg.status != 'OK') {
+                            error "❌ Pipeline stopped بسبب Quality Gate = ${qg.status}"
+                        }
+                    }
                 }
             }
         }
 
-        // ✅ 6) Build Docker avec tag unique (local var)
+        // ✅ 6) Build Docker avec tag unique
         stage('Build Docker Image') {
             steps {
                 dir('student-man-main') {
@@ -166,7 +174,7 @@ pipeline {
             }
         }
 
-        // ✅ 8) Déploiement temporaire pour DAST (sans nouvelle variable env)
+        // ✅ 8) Déploiement temporaire pour DAST
         stage('Deploy App for DAST') {
             steps {
                 script {
@@ -185,8 +193,6 @@ pipeline {
         }
 
         // ✅ 9) DAST Nikto
-        // - on essaie d’abord l’app locale (meilleur prod)
-        // - si tu veux absolument scanner APP_DAST_URL, laisse le bloc fallback
         stage('Nikto Scan (DAST)') {
             steps {
                 dir('student-man-main') {
@@ -283,6 +289,5 @@ student-man-main/${GITLEAKS_REPORT},
 student-man-main/summary-report.html"""
             )
         }
-        
     }
 }
