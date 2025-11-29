@@ -22,7 +22,7 @@ pipeline {
 
         stage('Clean Workspace') {
             steps {
-                
+
                 cleanWs()   
             }
         }
@@ -35,20 +35,37 @@ pipeline {
         }
 
         stage('Secrets Scan (Gitleaks)') {
-            steps {
-                dir('student-man-main') {
-                    sh '''
-                    echo "🔒 Running Gitleaks Secrets Scan..."
-                    gitleaks detect -f json --report-path $GITLEAKS_REPORT --source . || true
-                    '''
-                }
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: true
-                }
-            }
-        }
+  steps {
+    dir('student-man-main') {
+      sh '''
+      echo "🔒 Running Gitleaks Secrets Scan..."
+      set +e
+      gitleaks detect --source . \
+        --report-format json \
+        --report-path "$GITLEAKS_REPORT" \
+        --verbose
+      EXIT=$?
+      set -e
+
+      if [ $EXIT -ne 0 ] && [ $EXIT -ne 1 ]; then
+        echo "❌ Gitleaks failed with exit code $EXIT"
+        exit $EXIT
+      fi
+
+      # Ensure report exists even if clean
+      if [ ! -s "$GITLEAKS_REPORT" ]; then
+        echo "[]" > "$GITLEAKS_REPORT"
+      fi
+      '''
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: false
+    }
+  }
+}
+
 
         stage('Build with Maven') {
             steps {
