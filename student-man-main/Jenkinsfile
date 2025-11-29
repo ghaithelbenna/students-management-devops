@@ -4,14 +4,12 @@ pipeline {
     options {
         disableConcurrentBuilds()
         timestamps()
-        // skipDefaultCheckout(true)  // on fera checkout nous-mêmes
+        // skipDefaultCheckout(true)
     }
 
     environment {
         REGISTRY = "ghaith6789"
         IMAGE = "student_app_management"
-
-
         SONAR_HOST_URL = "http://192.168.33.10:9000"
         APP_DAST_URL   = "http://192.168.49.2:32639"
 
@@ -22,8 +20,7 @@ pipeline {
 
         stage('Clean Workspace') {
             steps {
-
-                cleanWs()   
+                cleanWs()
             }
         }
 
@@ -35,39 +32,35 @@ pipeline {
         }
 
         stage('Secrets Scan (Gitleaks)') {
-  steps {
-    dir('student-man-main') {
-      sh '''
-      echo "🔒 Running Gitleaks Secrets Scan..."
-      set +e
-      gitleaks detect --source . \
-        --report-format json \
-        --report-path "$GITLEAKS_REPORT" \
-        --verbose
-      EXIT=$?
-      set -e
+            steps {
+                dir('student-man-main') {
+                    sh '''
+                    echo "🔒 Running Gitleaks Secrets Scan..."
+                    set +e
+                    gitleaks detect --source . \
+                      --report-format json \
+                      --report-path "$GITLEAKS_REPORT" \
+                      --verbose
+                    EXIT=$?
+                    set -e
 
-      if [ $EXIT -ne 0 ] && [ $EXIT -ne 1 ]; then
-        echo "❌ Gitleaks failed with exit code $EXIT"
-        exit $EXIT
-      fi
+                    if [ $EXIT -ne 0 ] && [ $EXIT -ne 1 ]; then
+                      echo "❌ Gitleaks failed with exit code $EXIT"
+                      exit $EXIT
+                    fi
 
-      # Ensure report exists even if clean
-      if [ ! -s "$GITLEAKS_REPORT" ]; then
-        echo "[]" > "$GITLEAKS_REPORT"
-      fi
-      '''
-    }
-
-    
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: false
-    }
-  }
-}
-
+                    if [ ! -s "$GITLEAKS_REPORT" ]; then
+                      echo "[]" > "$GITLEAKS_REPORT"
+                    fi
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: false
+                }
+            }
+        }
 
         stage('Build with Maven') {
             steps {
@@ -123,43 +116,40 @@ pipeline {
         }
 
         stage('Trivy Scan (Container Security)') {
-  environment {
-    TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
-  }
-  steps {
-    dir('student-man-main') {
-      sh '''
-        echo "⬇️ Pre-downloading Trivy DB..."
-        trivy image --download-db-only || true
+            environment {
+                TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
+            }
+            steps {
+                dir('student-man-main') {
+                    sh '''
+                    echo "⬇️ Pre-downloading Trivy DB..."
+                    trivy image --download-db-only || true
 
-        echo "⬇️ Pre-downloading Trivy Java DB..."
-        trivy image --download-java-db-only || true
+                    echo "⬇️ Pre-downloading Trivy Java DB..."
+                    trivy image --download-java-db-only || true
 
-        echo "🧪 Running Trivy vulnerability scan (vuln only)..."
+                    echo "🧪 Running Trivy vulnerability scan (vuln only)..."
 
-        # Keep Jenkins alive with periodic output
-        (while true; do echo "[trivy] scanning... $(date)"; sleep 30; done) &
-        KEEPALIVE_PID=$!
+                    (while true; do echo "[trivy] scanning... $(date)"; sleep 30; done) &
+                    KEEPALIVE_PID=$!
 
-        trivy image --scanners vuln \
-          --severity HIGH,CRITICAL \
-          --timeout 15m \
-          --format table \
-          --output trivy-report.html \
-          $REGISTRY/$IMAGE:latest || true
+                    trivy image --scanners vuln \
+                      --severity HIGH,CRITICAL \
+                      --timeout 15m \
+                      --format table \
+                      --output trivy-report.html \
+                      $REGISTRY/$IMAGE:latest || true
 
-        kill $KEEPALIVE_PID
-      '''
-    }
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
-    }
-  }
-}
-
-
+                    kill $KEEPALIVE_PID
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
+                }
+            }
+        }
 
         stage('Nikto Scan (DAST)') {
             steps {
@@ -217,10 +207,33 @@ pipeline {
     post {
         always {
             echo '🎯 Pipeline finished. Reports generated successfully.'
-        }
-        failure {
 
-            
+            emailext(
+                subject: "Pipeline Status: ${currentBuild.currentResult} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """<html>
+  <body>
+    <h3>DevSecOps Pipeline Result</h3>
+    <p><b>Status:</b> ${currentBuild.currentResult}</p>
+    <p><b>Job:</b> ${env.JOB_NAME}</p>
+    <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
+    <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+    <p>Reports are archived in Jenkins workspace.</p>
+  </body>
+</html>""",
+                to: "ghaithelbenna2@gmail.com",
+                from: "jenkins@example.com",
+                replyTo: "jenkins@example.com",
+                mimeType: "text/html",
+                attachmentsPattern: """student-man-main/target/dependency-check-report.html,
+student-man-main/trivy-report.html,
+student-man-main/nikto-report.html,
+student-man-main/${GITLEAKS_REPORT},
+student-man-main/summary-report.html""",
+                compressAttachments: true
+            )
+        }
+
+        failure {
             echo '❌  Pipeline failed. Please check logs and reports for issues.'
         }
     }
