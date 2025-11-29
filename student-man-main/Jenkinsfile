@@ -9,10 +9,15 @@ pipeline {
     environment {
         REGISTRY = "ghaith6789"
         IMAGE = "student_app_management"
+
         SONAR_HOST_URL = "http://192.168.33.10:9000"
         APP_DAST_URL   = "http://192.168.49.2:32639"
 
         GITLEAKS_REPORT = "gitleaks-report.json"
+
+        // ➕ ADDED (FIX Trivy /tmp read-only)
+        TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
+        TRIVY_TMP_DIR   = "${WORKSPACE}/.trivytmp"
     }
 
     stages {
@@ -107,28 +112,30 @@ pipeline {
             steps {
                 dir('student-man-main') {
                     withSonarQubeEnv('SonarQube') {
+                        // 🔧 FIX: utiliser sonar.login (plus compatible que sonar.token)
                         sh """
                         echo "📊 Running SonarQube static code analysis..."
                         mvn -B sonar:sonar \
                           -Dsonar.projectKey=studentmang-app \
                           -Dsonar.host.url=${SONAR_HOST_URL} \
-                          -Dsonar.token=$SONAR_TOKEN
+                          -Dsonar.login=$SONAR_TOKEN
                         """
                     }
                 }
             }
         }
 
-        // ✅ ✅ 5bis) Quality Gate (Production ready)
+        // ✅ 5bis) Quality Gate (Production ready)
         stage('Quality Gate') {
             steps {
                 script {
+                    // 🔧 FIX: timeout + arrêt clair si gate KO
                     timeout(time: 10, unit: 'MINUTES') {
                         def qg = waitForQualityGate()
                         echo "✅ Quality Gate status: ${qg.status}"
 
                         if (qg.status != 'OK') {
-                            error "❌ Pipeline stopped بسبب Quality Gate = ${qg.status}"
+                            error "❌ Pipeline stopped: Quality Gate = ${qg.status}"
                         }
                     }
                 }
@@ -154,8 +161,16 @@ pipeline {
                 dir('student-man-main') {
                     script {
                         def dockerImage = "${env.REGISTRY}/${env.IMAGE}:${env.BUILD_NUMBER}"
+
+                        // 🔧 FIX: éviter /tmp en lecture seule
                         sh """
+                          echo "📌 Prepare Trivy writable dirs..."
+                          mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+
+                          export TMPDIR=${TRIVY_TMP_DIR}
+
                           trivy image --scanners vuln \
+                            --cache-dir ${TRIVY_CACHE_DIR} \
                             --severity HIGH,CRITICAL \
                             --exit-code 1 \
                             --timeout 15m \
