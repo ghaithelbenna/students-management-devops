@@ -4,9 +4,7 @@ pipeline {
     options {
         disableConcurrentBuilds()
         timestamps()
-        // skipDefaultCheckout(true)
     }
-
 
     environment {
         REGISTRY = "ghaith6789"
@@ -20,9 +18,7 @@ pipeline {
     stages {
 
         stage('Clean Workspace') {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
 
         stage('Checkout') {
@@ -32,63 +28,78 @@ pipeline {
             }
         }
 
-        stage('Secrets Scan (Gitleaks)') {
+        // ✅ 1) Tests obligatoires (prod)
+        stage('Unit Tests') {
             steps {
                 dir('student-man-main') {
-                    sh '''
-                    echo "🔒 Running Gitleaks Secrets Scan..."
-                    set +e
-                    gitleaks detect --source . \
-                      --report-format json \
-                      --report-path "$GITLEAKS_REPORT" \
-                      --verbose
-                    EXIT=$?
-                    set -e
-
-                    if [ $EXIT -ne 0 ] && [ $EXIT -ne 1 ]; then
-                      echo "❌ Gitleaks failed with exit code $EXIT"
-                      exit $EXIT
-                    fi
-
-                    if [ ! -s "$GITLEAKS_REPORT" ]; then
-                      echo "[]" > "$GITLEAKS_REPORT"
-                    fi
-                    '''
+                    sh 'mvn -B clean test'
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}", allowEmptyArchive: false
+                    junit testResults: 'student-man-main/target/surefire-reports/*.xml',
+                          allowEmptyResults: false
                 }
             }
         }
 
+        // ✅ 2) Build Jar
         stage('Build with Maven') {
             steps {
                 dir('student-man-main') {
                     sh 'mvn -B clean package -DskipTests'
                 }
             }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/target/*.jar',
+                                     allowEmptyArchive: false
+                }
+            }
         }
 
-        stage('Dependency Check (SCA)') {
+        // ✅ 3) Secrets scan prod (FAIL si leaks)
+        stage('Secrets Scan (Gitleaks)') {
             steps {
                 dir('student-man-main') {
                     sh '''
-                    echo "🔍 Running lightweight OWASP Dependency-Check..."
-                    mvn -B org.owasp:dependency-check-maven:check \
-                        -Dformat=HTML \
-                        -DskipAssembly=true || true
+                    echo "🔒 Running Gitleaks Secrets Scan..."
+                    gitleaks detect --source . \
+                      --redact \
+                      --report-format json \
+                      --report-path "$GITLEAKS_REPORT"
                     '''
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'student-man-main/target/dependency-check-report.html', allowEmptyArchive: true
+                    archiveArtifacts artifacts: "student-man-main/${GITLEAKS_REPORT}",
+                                     allowEmptyArchive: false
                 }
             }
         }
 
+        // ✅ 4) SCA prod : FAIL si CVSS >= 7
+        stage('Dependency Check (SCA)') {
+            steps {
+                dir('student-man-main') {
+                    sh '''
+                    echo "🔍 Running OWASP Dependency-Check..."
+                    mvn -B org.owasp:dependency-check-maven:check \
+                        -Dformat=HTML \
+                        -DfailBuildOnCVSS=7
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/target/dependency-check-report.html',
+                                     allowEmptyArchive: false
+                }
+            }
+        }
+
+        // ✅ 5) SAST Sonar prod : pas de true + quality gate
         stage('SonarQube (SAST)') {
             environment {
                 SONARQUBE = credentials('sonarqube-token')
@@ -101,82 +112,120 @@ pipeline {
                         mvn -B sonar:sonar \
                           -Dsonar.projectKey=studentmang-app \
                           -Dsonar.host.url=${SONAR_HOST_URL} \
-                          -Dsonar.login=$SONARQUBE || true
+                          -Dsonar.login=$SONARQUBE
                         '''
                     }
                 }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Quality Gate') {
             steps {
-                dir('student-man-main') {
-                    sh 'docker build -t $REGISTRY/$IMAGE:latest .'
+                timeout(time: 2, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
 
-        stage('Trivy Scan (Container Security)') {
-            environment {
-                TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
-            }
+        // ✅ 6) Build Docker avec tag unique (local var)
+        stage('Build Docker Image') {
             steps {
                 dir('student-man-main') {
-                    sh '''
-                    echo "⬇️ Pre-downloading Trivy DB..."
-                    trivy image --download-db-only || true
+                    script {
+                        def dockerImage = "${env.REGISTRY}/${env.IMAGE}:${env.BUILD_NUMBER}"
+                        sh "docker build -t ${dockerImage} ."
+                        sh "docker tag ${dockerImage} ${env.REGISTRY}/${env.IMAGE}:latest"
+                    }
+                }
+            }
+        }
 
-                    echo "⬇️ Pre-downloading Trivy Java DB..."
-                    trivy image --download-java-db-only || true
-
-                    echo "🧪 Running Trivy vulnerability scan (vuln only)..."
-
-                    (while true; do echo "[trivy] scanning... $(date)"; sleep 30; done) &
-                    KEEPALIVE_PID=$!
-
-                    trivy image --scanners vuln \
-                      --severity HIGH,CRITICAL \
-                      --timeout 15m \
-                      --format table \
-                      --output trivy-report.html \
-                      $REGISTRY/$IMAGE:latest || true
-
-                    kill $KEEPALIVE_PID
-                    '''
+        // ✅ 7) Trivy prod : FAIL si HIGH/CRITICAL
+        stage('Trivy Scan (Container Security)') {
+            steps {
+                dir('student-man-main') {
+                    script {
+                        def dockerImage = "${env.REGISTRY}/${env.IMAGE}:${env.BUILD_NUMBER}"
+                        sh """
+                          trivy image --scanners vuln \
+                            --severity HIGH,CRITICAL \
+                            --exit-code 1 \
+                            --timeout 15m \
+                            --format table \
+                            --output trivy-report.html \
+                            ${dockerImage}
+                        """
+                    }
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
+                                     allowEmptyArchive: false
                 }
             }
         }
 
+        // ✅ 8) Déploiement temporaire pour DAST (sans nouvelle variable env)
+        stage('Deploy App for DAST') {
+            steps {
+                script {
+                    def dockerImage  = "${env.REGISTRY}/${env.IMAGE}:${env.BUILD_NUMBER}"
+                    def appContainer = "app-test-${env.BUILD_NUMBER}"
+
+                    sh """
+                      docker rm -f ${appContainer} || true
+                      docker run -d --name ${appContainer} -p 8080:8080 ${dockerImage}
+
+                      echo "Waiting for app..."
+                      timeout 120 bash -c 'until curl -f http://localhost:8080/ >/dev/null 2>&1; do sleep 5; done'
+                    """
+                }
+            }
+        }
+
+        // ✅ 9) DAST Nikto
+        // - on essaie d’abord l’app locale (meilleur prod)
+        // - si tu veux absolument scanner APP_DAST_URL, laisse le bloc fallback
         stage('Nikto Scan (DAST)') {
             steps {
                 dir('student-man-main') {
                     sh '''
-                    echo "💥 Running Nikto web vulnerability scan on $APP_DAST_URL..."
-                    nikto -h $APP_DAST_URL -maxtime 60 -Format html -o nikto-report.html || true
+                    echo "💥 Running Nikto on local deployed app..."
+                    nikto -h http://localhost:8080 \
+                      -maxtime 120 \
+                      -Format html \
+                      -o nikto-report.html
                     '''
                 }
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'student-man-main/nikto-report.html', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'student-man-main/nikto-report.html',
+                                     allowEmptyArchive: false
                 }
             }
         }
 
+        // ✅ 10) Push seulement si tout SUCCESS
         stage('Push to Docker Hub') {
+            when { expression { currentBuild.currentResult == 'SUCCESS' } }
             steps {
                 dir('student-man-main') {
-                    withCredentials([usernamePassword(credentialsId: 'dockerhub', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push $REGISTRY/$IMAGE:latest || true
-                        docker logout
-                        '''
+                    script {
+                        def dockerImage = "${env.REGISTRY}/${env.IMAGE}:${env.BUILD_NUMBER}"
+                        withCredentials([usernamePassword(
+                            credentialsId: 'dockerhub',
+                            usernameVariable: 'DOCKER_USER',
+                            passwordVariable: 'DOCKER_PASS'
+                        )]) {
+                            sh """
+                              echo "\$DOCKER_PASS" | docker login -u "\$DOCKER_USER" --password-stdin
+                              docker push ${dockerImage}
+                              docker push ${env.REGISTRY}/${env.IMAGE}:latest
+                              docker logout
+                            """
+                        }
                     }
                 }
             }
@@ -200,42 +249,39 @@ pipeline {
                     </body></html>
                     """
                 }
-                archiveArtifacts artifacts: 'student-man-main/summary-report.html', allowEmptyArchive: true
+                archiveArtifacts artifacts: 'student-man-main/summary-report.html',
+                                 allowEmptyArchive: false
             }
         }
     }
 
     post {
         always {
-            echo '🎯 Pipeline finished. Reports generated successfully.'
+            echo '🎯 Pipeline finished.'
+
+            // cleanup conteneur de test
+            script {
+                def appContainer = "app-test-${env.BUILD_NUMBER}"
+                sh "docker rm -f ${appContainer} || true"
+            }
 
             emailext(
-    subject: "Pipeline Status: ${currentBuild.currentResult} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-    body: """<html>
-  <body>
-    <h3>DevSecOps Pipeline Result</h3>
-    <p><b>Status:</b> ${currentBuild.currentResult}</p>
-    <p><b>Job:</b> ${env.JOB_NAME}</p>
-    <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
-    <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
-    <p>Reports are archived in Jenkins workspace.</p>
-  </body>
-</html>""",
-    to: "ghaithelbenna2@gmail.com",
-    from: "jenkins@example.com",
-    replyTo: "jenkins@example.com",
-    mimeType: "text/html",
-    attachmentsPattern: """student-man-main/target/dependency-check-report.html,
+                subject: "Pipeline Status: ${currentBuild.currentResult} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                body: """<html><body>
+                    <h3>DevSecOps Pipeline Result</h3>
+                    <p><b>Status:</b> ${currentBuild.currentResult}</p>
+                    <p><b>Job:</b> ${env.JOB_NAME}</p>
+                    <p><b>Build Number:</b> ${env.BUILD_NUMBER}</p>
+                    <p><b>Build URL:</b> <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                </body></html>""",
+                to: "ghaithelbenna2@gmail.com",
+                mimeType: "text/html",
+                attachmentsPattern: """student-man-main/target/dependency-check-report.html,
 student-man-main/trivy-report.html,
 student-man-main/nikto-report.html,
 student-man-main/${GITLEAKS_REPORT},
 student-man-main/summary-report.html"""
-)
-
-        }
-
-        failure {
-            echo '❌  Pipeline failed. Please check logs and reports for issues.'
+            )
         }
     }
 }
