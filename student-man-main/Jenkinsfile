@@ -210,8 +210,8 @@ pipeline {
             echo '🎯 Pipeline finished. Reports generated successfully.'
 
             emailext(
-                subject: "Pipeline Status: ${currentBuild.currentResult} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                body: """<html>
+    subject: "Pipeline Status: ${currentBuild.currentResult} - ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+    body: """<html>
   <body>
     <h3>DevSecOps Pipeline Result</h3>
     <p><b>Status:</b> ${currentBuild.currentResult}</p>
@@ -221,17 +221,17 @@ pipeline {
     <p>Reports are archived in Jenkins workspace.</p>
   </body>
 </html>""",
-                to: "ghaithelbenna2@gmail.com",
-                from: "jenkins@example.com",
-                replyTo: "jenkins@example.com",
-                mimeType: "text/html",
-                attachmentsPattern: """student-man-main/target/dependency-check-report.html,
+    to: "ghaithelbenna2@gmail.com",
+    from: "jenkins@example.com",
+    replyTo: "jenkins@example.com",
+    mimeType: "text/html",
+    attachmentsPattern: """student-man-main/target/dependency-check-report.html,
 student-man-main/trivy-report.html,
 student-man-main/nikto-report.html,
 student-man-main/${GITLEAKS_REPORT},
-student-man-main/summary-report.html""",
-                compressAttachments: true
-            )
+student-man-main/summary-report.html"""
+)
+
         }
 
         failure {
