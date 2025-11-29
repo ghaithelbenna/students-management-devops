@@ -22,7 +22,8 @@ pipeline {
 
         stage('Clean Workspace') {
             steps {
-                cleanWs()   // si pas le plugin, remplace par deleteDir()
+                
+                cleanWs()   
             }
         }
 
