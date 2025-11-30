@@ -162,32 +162,38 @@ pipeline {
 
         // 7) Trivy scan (FAIL HIGH/CRITICAL)
         stage('Trivy Scan (Container Security)') {
-            steps {
-                dir('student-man-main') {
-                    sh """
-                        mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
-                        export TMPDIR=${TRIVY_TMP_DIR}
+    steps {
+        dir('student-man-main') {
+            sh """
+                mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+                export TMPDIR=${TRIVY_TMP_DIR}
 
-                        echo "🛡️ Running Trivy..."
-                        trivy image --scanners vuln \
-                          --cache-dir ${TRIVY_CACHE_DIR} \
-                          --severity HIGH,CRITICAL \
-                          --exit-code 1 \
-                          --timeout 15m \
-                          --format template \
-                          --template "@contrib/html.tpl" \
-                          --output trivy-report.html \
-                          ${DOCKER_IMAGE}
-                    """
-                }
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
-                                     allowEmptyArchive: false
-                }
-            }
+                echo "⬇️ Download Trivy HTML template..."
+                curl -sSL \
+                  https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
+                  -o html.tpl
+
+                echo "🛡️ Running Trivy..."
+                trivy image --scanners vuln \
+                  --cache-dir ${TRIVY_CACHE_DIR} \
+                  --severity HIGH,CRITICAL \
+                  --exit-code 1 \
+                  --timeout 15m \
+                  --format template \
+                  --template "@html.tpl" \
+                  --output trivy-report.html \
+                  ${DOCKER_IMAGE}
+            """
         }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
+                             allowEmptyArchive: false
+        }
+    }
+}
+
 
         // 8) Deploy staging
         stage('Deploy Staging for DAST') {
