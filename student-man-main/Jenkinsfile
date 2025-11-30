@@ -11,22 +11,17 @@ pipeline {
         REGISTRY = "ghaith6789"
         IMAGE    = "student_app_management"
 
-        // Docker tags
         DOCKER_IMAGE        = "${REGISTRY}/${IMAGE}:${BUILD_NUMBER}"
         DOCKER_IMAGE_LATEST = "${REGISTRY}/${IMAGE}:latest"
 
-        // Sonar / DAST
         SONAR_HOST_URL = "http://192.168.33.10:9000"
         APP_DAST_URL   = "http://localhost:8080"
 
-        // Reports
         GITLEAKS_REPORT = "gitleaks-report.json"
 
-        // Trivy writable dirs
         TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
         TRIVY_TMP_DIR   = "${WORKSPACE}/.trivytmp"
 
-        // ZAP
         APP_CONTAINER = "app-zap-${BUILD_NUMBER}"
         ZAP_NETWORK   = "zap-net-${BUILD_NUMBER}"
     }
@@ -37,7 +32,6 @@ pipeline {
             steps { cleanWs() }
         }
 
-        // 1) Checkout
         stage('Checkout') {
             steps {
                 git branch: 'master',
@@ -45,7 +39,6 @@ pipeline {
             }
         }
 
-        // 2) Secrets scan (FAIL si leaks)
         stage('Secrets Scan (Gitleaks)') {
             steps {
                 dir('student-man-main') {
@@ -67,7 +60,6 @@ pipeline {
             }
         }
 
-        // 3) Build (inclut Unit Tests)
         stage('Unit Tests') {
             steps {
                 dir('student-man-main') {
@@ -96,7 +88,6 @@ pipeline {
             }
         }
 
-        // 4) SCA Dependency-Check (FAIL CVSS >=7)
         stage('Dependency Check (SCA)') {
             steps {
                 dir('student-man-main') {
@@ -116,7 +107,6 @@ pipeline {
             }
         }
 
-        // 5) SAST Sonar + Quality Gate (bloquant)
         stage('SonarQube (SAST)') {
             environment {
                 SONAR_TOKEN = credentials('sonarqube-token')
@@ -124,13 +114,13 @@ pipeline {
             steps {
                 dir('student-man-main') {
                     withSonarQubeEnv('SonarQube') {
-                        sh """
+                        sh '''
                             echo "📊 Running SonarQube..."
                             mvn -B sonar:sonar \
                               -Dsonar.projectKey=studentmang-app \
-                              -Dsonar.host.url=${SONAR_HOST_URL} \
+                              -Dsonar.host.url=$SONAR_HOST_URL \
                               -Dsonar.login=$SONAR_TOKEN
-                        """
+                        '''
                     }
                 }
             }
@@ -150,7 +140,6 @@ pipeline {
             }
         }
 
-        // 6) Docker build
         stage('Build Docker Image') {
             steps {
                 dir('student-man-main') {
@@ -160,45 +149,45 @@ pipeline {
             }
         }
 
-        // 7) Trivy scan (FAIL HIGH/CRITICAL)
         stage('Trivy Scan (Container Security)') {
-    steps {
-        dir('student-man-main') {
-            sh """
-                mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
-                export TMPDIR=${TRIVY_TMP_DIR}
+            steps {
+                dir('student-man-main') {
+                    sh """
+                        mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+                        export TMPDIR=${TRIVY_TMP_DIR}
 
-                echo "🛡️ Running Trivy..."
-                trivy image --scanners vuln \
-                  --cache-dir ${TRIVY_CACHE_DIR} \
-                  --severity HIGH,CRITICAL \
-                  --exit-code 1 \
-                  --timeout 15m \
-                  --format template \
-                  --template "@html.tpl" \
-                  --output trivy-report.html \
-                  ${DOCKER_IMAGE}
-            """
+                        echo "🛡️ Running Trivy..."
+                        trivy image --scanners vuln \
+                          --cache-dir ${TRIVY_CACHE_DIR} \
+                          --severity HIGH,CRITICAL \
+                          --exit-code 1 \
+                          --timeout 15m \
+                          --no-progress \
+                          --format template \
+                          --template "@html.tpl" \
+                          --output trivy-report.html \
+                          ${DOCKER_IMAGE}
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
+                                     allowEmptyArchive: false
+                }
+            }
         }
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
-                             allowEmptyArchive: false
-        }
-    }
-}
 
-
-        // 8) Deploy staging
         stage('Deploy Staging for DAST') {
             steps {
                 script {
                     def appContainer = "app-test-${env.BUILD_NUMBER}"
-                    sh """
-                        docker rm -f ${appContainer} || true
-                        docker run -d --name ${appContainer} -p 8080:8080 ${DOCKER_IMAGE}
 
+                    // clean sans masquer d’erreur sécurité
+                    sh "docker rm -f ${appContainer} || docker ps -a | grep ${appContainer} || true"
+
+                    sh """
+                        docker run -d --name ${appContainer} -p 8080:8080 ${DOCKER_IMAGE}
                         echo "Waiting for app..."
                         timeout 120 bash -c 'until curl -f ${APP_DAST_URL}/ >/dev/null 2>&1; do sleep 5; done'
                     """
@@ -206,7 +195,6 @@ pipeline {
             }
         }
 
-        // 9) DAST (Nikto + ZAP)
         stage('Nikto Scan (DAST)') {
             steps {
                 dir('student-man-main') {
@@ -214,7 +202,7 @@ pipeline {
                         echo "💥 Running Nikto..."
                         nikto -h ${APP_DAST_URL} \
                           -maxtime 120 \
-                          -Format htm \
+                          -Format html \
                           -o nikto-report.html
                     """
                 }
@@ -235,9 +223,6 @@ pipeline {
                         NET=${ZAP_NETWORK}
                         IMG=${DOCKER_IMAGE}
 
-                        docker rm -f \$APP || true
-                        docker network rm \$NET || true
-
                         docker network create \$NET
                         docker run -d --network \$NET --name \$APP \$IMG
 
@@ -250,9 +235,6 @@ pipeline {
                             -t http://\$APP:8080 \
                             -x /zap/wrk/zap-report.xml \
                             -r /zap/wrk/zap-report.html
-
-                        docker rm -f \$APP || true
-                        docker network rm \$NET || true
                     """
                 }
             }
@@ -264,7 +246,6 @@ pipeline {
             }
         }
 
-        // 10) Push (seulement si SUCCESS)
         stage('Push to Docker Hub') {
             when { expression { currentBuild.currentResult == 'SUCCESS' } }
             steps {
@@ -285,7 +266,6 @@ pipeline {
             }
         }
 
-        // 11) Reporting
         stage('Generate Summary Report') {
             steps {
                 script {
@@ -315,13 +295,11 @@ pipeline {
         always {
             echo "🎯 Pipeline finished."
 
-            // Cleanup staging container
             script {
                 def appContainer = "app-test-${env.BUILD_NUMBER}"
                 sh "docker rm -f ${appContainer} || true"
             }
 
-            // Cleanup ZAP safety
             sh """
                 docker rm -f ${APP_CONTAINER} || true
                 docker network rm ${ZAP_NETWORK} || true
