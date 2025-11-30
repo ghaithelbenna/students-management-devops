@@ -168,11 +168,6 @@ pipeline {
                 mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
                 export TMPDIR=${TRIVY_TMP_DIR}
 
-                echo "⬇️ Download Trivy HTML template..."
-                curl -sSL \
-                  https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/html.tpl \
-                  -o html.tpl
-
                 echo "🛡️ Running Trivy..."
                 trivy image --scanners vuln \
                   --cache-dir ${TRIVY_CACHE_DIR} \
