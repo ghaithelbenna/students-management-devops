@@ -1,91 +1,53 @@
-{{- if . }}
-<!DOCTYPE html>
-<html lang="en">
+{{- /* Trivy HTML template (simple + compatible) */ -}}
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Trivy Report - {{ now }}</title>
+  <meta charset="utf-8"/>
+  <title>Trivy Report</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; }
-    h1, h2 { margin-bottom: 8px; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+    h2 { margin-top: 30px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
     th, td { border: 1px solid #ddd; padding: 8px; font-size: 14px; }
-    th { background: #f2f2f2; }
-    .CRITICAL { background: #ffb3b3; font-weight: bold; }
-    .HIGH { background: #ffd9b3; font-weight: bold; }
-    .MEDIUM { background: #fff0b3; }
-    .LOW { background: #e6ffb3; }
+    th { background: #f4f4f4; }
+    .HIGH { background: #fff3cd; }
+    .CRITICAL { background: #f8d7da; }
+    .MEDIUM, .LOW, .UNKNOWN { background: #eee; }
   </style>
 </head>
 <body>
 
-<h1>Trivy Security Report</h1>
-<p><b>Generated:</b> {{ now }}</p>
+<h1>Trivy Container Scan Report</h1>
 
-{{- range . }}
-  <h2>Target: {{ escapeXML .Target }}</h2>
-  <p><b>Type:</b> {{ escapeXML .Type }}</p>
+{{- range .Results }}
+  <h2>Target: {{ .Target }}</h2>
 
   {{- if .Vulnerabilities }}
     <table>
       <tr>
+        <th>VulnerabilityID</th>
         <th>Package</th>
-        <th>Vulnerability ID</th>
-        <th>Severity</th>
         <th>Installed</th>
         <th>Fixed</th>
-        <th>Links</th>
+        <th>Severity</th>
+        <th>Title</th>
       </tr>
 
       {{- range .Vulnerabilities }}
-      <tr class="{{ escapeXML .Severity }}">
-        <td>{{ escapeXML .PkgName }}</td>
-        <td>{{ escapeXML .VulnerabilityID }}</td>
-        <td>{{ escapeXML .Severity }}</td>
-        <td>{{ escapeXML .InstalledVersion }}</td>
-        <td>{{ escapeXML .FixedVersion }}</td>
-        <td>
-          {{- range .References }}
-            <a href="{{ escapeXML . }}">{{ escapeXML . }}</a><br/>
-          {{- end }}
-        </td>
+      <tr class="{{ .Severity }}">
+        <td>{{ .VulnerabilityID }}</td>
+        <td>{{ .PkgName }}</td>
+        <td>{{ .InstalledVersion }}</td>
+        <td>{{ .FixedVersion }}</td>
+        <td>{{ .Severity }}</td>
+        <td>{{ .Title }}</td>
       </tr>
       {{- end }}
     </table>
   {{- else }}
-    <p>No Vulnerabilities found ✅</p>
-  {{- end }}
-
-  {{- if .Misconfigurations }}
-    <table>
-      <tr>
-        <th>Type</th>
-        <th>Misconf ID</th>
-        <th>Check</th>
-        <th>Severity</th>
-        <th>Message</th>
-        <th>Primary URL</th>
-      </tr>
-
-      {{- range .Misconfigurations }}
-      <tr class="{{ escapeXML .Severity }}">
-        <td>{{ escapeXML .Type }}</td>
-        <td>{{ escapeXML .ID }}</td>
-        <td>{{ escapeXML .Title }}</td>
-        <td>{{ escapeXML .Severity }}</td>
-        <td>{{ escapeXML .Message }}</td>
-        <td><a href="{{ escapeXML .PrimaryURL }}">{{ escapeXML .PrimaryURL }}</a></td>
-      </tr>
-      {{- end }}
-    </table>
-  {{- else }}
-    <p>No Misconfigurations found ✅</p>
+    <p>No vulnerabilities found 🎉</p>
   {{- end }}
 
 {{- end }}
 
 </body>
 </html>
-{{- else }}
-<!DOCTYPE html>
-<html><body><h1>Trivy Returned Empty Report</h1></body></html>
-{{- end }}
