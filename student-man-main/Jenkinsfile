@@ -148,35 +148,35 @@ pipeline {
                 }
             }
         }
+stage('Trivy Scan (Container Security)') {
+    steps {
+        dir('student-man-main') {
+            sh """
+                mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+                export TMPDIR=${TRIVY_TMP_DIR}
 
-        stage('Trivy Scan (Container Security)') {
-            steps {
-                dir('student-man-main') {
-                    sh """
-                        mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
-                        export TMPDIR=${TRIVY_TMP_DIR}
-
-                        echo "🛡️ Running Trivy..."
-                        trivy image --scanners vuln \
-                          --cache-dir ${TRIVY_CACHE_DIR} \
-                          --severity HIGH,CRITICAL \
-                          --exit-code 1 \
-                          --timeout 15m \
-                          --no-progress \
-                          --format template \
-                          --template "@html.tpl" \
-                          --output trivy-report.html \
-                          ${DOCKER_IMAGE}
-                    """
-                }
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
-                                     allowEmptyArchive: false
-                }
-            }
+                echo "🛡️ Running Trivy..."
+                trivy image \
+                  --scanners vuln \
+                  --cache-dir ${TRIVY_CACHE_DIR} \
+                  --severity HIGH,CRITICAL \
+                  --exit-code 1 \
+                  --timeout 30m \
+                  --no-progress \
+                  --format html \
+                  --output trivy-report.html \
+                  ${DOCKER_IMAGE}
+            """
         }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
+                             allowEmptyArchive: false
+        }
+    }
+}
+
 
         stage('Deploy Staging for DAST') {
             steps {
