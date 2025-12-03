@@ -152,20 +152,25 @@ stage('Trivy Scan (Container Security)') {
     steps {
         dir('student-man-main') {
             sh """
+                echo "🛡️ Running Trivy (HTML template officiel)..."
                 mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
                 export TMPDIR=${TRIVY_TMP_DIR}
 
-                echo "🛡️ Running Trivy..."
-                trivy image \
-                  --scanners vuln \
-                  --cache-dir ${TRIVY_CACHE_DIR} \
-                  --severity HIGH,CRITICAL \
-                  --exit-code 1 \
-                  --timeout 30m \
-                  --no-progress \
-                  --format html \
-                  --output trivy-report.html \
-                  ${DOCKER_IMAGE}
+                # Trivy via Docker pour garantir compatibilité template
+                docker run --rm \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  -v ${TRIVY_CACHE_DIR}:/root/.cache/trivy \
+                  -v \$(pwd):/work \
+                  aquasec/trivy:latest image \
+                    --scanners vuln \
+                    --severity HIGH,CRITICAL \
+                    --exit-code 1 \
+                    --timeout 30m \
+                    --no-progress \
+                    --format template \
+                    --template "@/contrib/html.tpl" \
+                    --output /work/trivy-report.html \
+                    ${DOCKER_IMAGE}
             """
         }
     }
@@ -176,6 +181,7 @@ stage('Trivy Scan (Container Security)') {
         }
     }
 }
+
 
 
         stage('Deploy Staging for DAST') {
