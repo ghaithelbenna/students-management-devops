@@ -5,7 +5,7 @@ pipeline {
         disableConcurrentBuilds()
         timestamps()
         timeout(time: 40, unit: 'MINUTES')
-        skipDefaultCheckout(true)   // ✅ évite checkout Jenkins implicite (@script)
+        skipDefaultCheckout(true)   // évite checkout Jenkins implicite (@script)
     }
 
     environment {
@@ -20,7 +20,7 @@ pipeline {
 
         GITLEAKS_REPORT = "gitleaks-report.json"
 
-        // ✅ cache Trivy hors workspace pour ne pas être supprimé par cleanWs()
+        // cache Trivy hors workspace (cleanWs ne le supprime pas)
         TRIVY_CACHE_DIR = "/var/lib/jenkins/.trivycache"
         TRIVY_TMP_DIR   = "/var/lib/jenkins/.trivytmp"
 
@@ -34,7 +34,7 @@ pipeline {
             steps { cleanWs() }
         }
 
-        // ✅ FIX Git corruption : force clean clone
+        // FIX Git corruption : force clean clone
         stage('Checkout (Force Clean Clone)') {
             steps {
                 deleteDir()
@@ -117,6 +117,26 @@ pipeline {
             }
         }
 
+        // ✅ NEW: attendre Sonar UP
+        stage('Wait for SonarQube') {
+            steps {
+                sh """
+                  echo "⏳ Waiting for SonarQube to be UP..."
+                  for i in {1..30}; do
+                    STATUS=\$(curl -s ${SONAR_HOST_URL}/api/system/status | grep -oP '(?<="status":")[^"]+')
+                    echo "SonarQube status: \$STATUS"
+                    if [ "\$STATUS" = "UP" ]; then
+                      echo "✅ SonarQube is UP"
+                      exit 0
+                    fi
+                    sleep 10
+                  done
+                  echo "❌ SonarQube not UP after waiting"
+                  exit 1
+                """
+            }
+        }
+
         stage('SonarQube (SAST)') {
             environment {
                 SONAR_TOKEN = credentials('sonarqube-token')
@@ -126,7 +146,7 @@ pipeline {
                     withSonarQubeEnv('SonarQube') {
                         sh '''
                             echo "📊 Running SonarQube..."
-                            mvn -B sonar:sonar \
+                            mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:4.0.0.4121:sonar \
                               -Dsonar.projectKey=studentmang-app \
                               -Dsonar.host.url=$SONAR_HOST_URL \
                               -Dsonar.login=$SONAR_TOKEN
@@ -159,7 +179,7 @@ pipeline {
             }
         }
 
-        // ✅ NEW: update DB Trivy une seule fois (cache)
+        // update DB Trivy une seule fois (cache)
         stage('Trivy DB Update') {
             steps {
                 sh """
@@ -173,7 +193,7 @@ pipeline {
             }
         }
 
-        // ✅ FIX Trivy scan + template officiel stable
+        // FIX Trivy scan + template officiel stable + limite threads
         stage('Trivy Scan (Container Security)') {
             steps {
                 dir('student-man-main') {
@@ -194,6 +214,7 @@ pipeline {
                             --no-progress \
                             --skip-db-update \
                             --skip-java-db-update \
+                            --parallel 1 \
                             --format template \
                             --template "@/contrib/html.tpl" \
                             --output /work/trivy-report.html \
