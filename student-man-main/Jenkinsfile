@@ -5,6 +5,7 @@ pipeline {
         disableConcurrentBuilds()
         timestamps()
         timeout(time: 40, unit: 'MINUTES')
+        skipDefaultCheckout(true)   // ✅ évite checkout Jenkins implicite (@script)
     }
 
     environment {
@@ -19,8 +20,9 @@ pipeline {
 
         GITLEAKS_REPORT = "gitleaks-report.json"
 
-        TRIVY_CACHE_DIR = "${WORKSPACE}/.trivycache"
-        TRIVY_TMP_DIR   = "${WORKSPACE}/.trivytmp"
+        // ✅ cache Trivy hors workspace pour ne pas être supprimé par cleanWs()
+        TRIVY_CACHE_DIR = "/var/lib/jenkins/.trivycache"
+        TRIVY_TMP_DIR   = "/var/lib/jenkins/.trivytmp"
 
         APP_CONTAINER = "app-zap-${BUILD_NUMBER}"
         ZAP_NETWORK   = "zap-net-${BUILD_NUMBER}"
@@ -32,10 +34,18 @@ pipeline {
             steps { cleanWs() }
         }
 
-        stage('Checkout') {
+        // ✅ FIX Git corruption : force clean clone
+        stage('Checkout (Force Clean Clone)') {
             steps {
-                git branch: 'master',
-                    url: 'https://github.com/ghaithelbenna/students-management-devops.git'
+                deleteDir()
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/master']],
+                    userRemoteConfigs: [[url: 'https://github.com/ghaithelbenna/students-management-devops.git']],
+                    extensions: [
+                        [$class: 'WipeWorkspace'],
+                        [$class: 'CleanBeforeCheckout']
+                    ]
+                ])
             }
         }
 
@@ -148,50 +158,62 @@ pipeline {
                 }
             }
         }
-stage('Trivy Scan (Container Security)') {
-    steps {
-        dir('student-man-main') {
-            sh """
-                echo "🛡️ Running Trivy (HTML template officiel)..."
-                mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
-                export TMPDIR=${TRIVY_TMP_DIR}
 
-                # Trivy via Docker pour garantir compatibilité template
-                docker run --rm \
-                  -v /var/run/docker.sock:/var/run/docker.sock \
-                  -v ${TRIVY_CACHE_DIR}:/root/.cache/trivy \
-                  -v \$(pwd):/work \
-                  aquasec/trivy:latest image \
-                    --scanners vuln \
-                    --severity HIGH,CRITICAL \
-                    --exit-code 1 \
-                    --timeout 30m \
-                    --no-progress \
-                    --format template \
-                    --template "@/contrib/html.tpl" \
-                    --output /work/trivy-report.html \
-                    ${DOCKER_IMAGE}
-            """
+        // ✅ NEW: update DB Trivy une seule fois (cache)
+        stage('Trivy DB Update') {
+            steps {
+                sh """
+                    echo "📥 Updating Trivy DB (cached)..."
+                    mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+                    docker run --rm \
+                      -v ${TRIVY_CACHE_DIR}:/root/.cache/trivy \
+                      aquasec/trivy:latest \
+                      image --download-db-only --download-java-db-only
+                """
+            }
         }
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
-                             allowEmptyArchive: false
+
+        // ✅ FIX Trivy scan + template officiel stable
+        stage('Trivy Scan (Container Security)') {
+            steps {
+                dir('student-man-main') {
+                    sh """
+                        echo "🛡️ Running Trivy (HTML template officiel)..."
+                        mkdir -p ${TRIVY_CACHE_DIR} ${TRIVY_TMP_DIR}
+                        export TMPDIR=${TRIVY_TMP_DIR}
+
+                        docker run --rm \
+                          -v /var/run/docker.sock:/var/run/docker.sock \
+                          -v ${TRIVY_CACHE_DIR}:/root/.cache/trivy \
+                          -v \$(pwd):/work \
+                          aquasec/trivy:latest image \
+                            --scanners vuln \
+                            --severity HIGH,CRITICAL \
+                            --exit-code 1 \
+                            --timeout 30m \
+                            --no-progress \
+                            --skip-db-update \
+                            --skip-java-db-update \
+                            --format template \
+                            --template "@/contrib/html.tpl" \
+                            --output /work/trivy-report.html \
+                            ${DOCKER_IMAGE}
+                    """
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'student-man-main/trivy-report.html',
+                                     allowEmptyArchive: false
+                }
+            }
         }
-    }
-}
-
-
 
         stage('Deploy Staging for DAST') {
             steps {
                 script {
                     def appContainer = "app-test-${env.BUILD_NUMBER}"
-
-                    // clean sans masquer d’erreur sécurité
-                    sh "docker rm -f ${appContainer} || docker ps -a | grep ${appContainer} || true"
-
+                    sh "docker rm -f ${appContainer} || true"
                     sh """
                         docker run -d --name ${appContainer} -p 8080:8080 ${DOCKER_IMAGE}
                         echo "Waiting for app..."
@@ -229,6 +251,9 @@ stage('Trivy Scan (Container Security)') {
                         NET=${ZAP_NETWORK}
                         IMG=${DOCKER_IMAGE}
 
+                        docker rm -f \$APP || true
+                        docker network rm \$NET || true
+
                         docker network create \$NET
                         docker run -d --network \$NET --name \$APP \$IMG
 
@@ -241,6 +266,9 @@ stage('Trivy Scan (Container Security)') {
                             -t http://\$APP:8080 \
                             -x /zap/wrk/zap-report.xml \
                             -r /zap/wrk/zap-report.html
+
+                        docker rm -f \$APP || true
+                        docker network rm \$NET || true
                     """
                 }
             }
